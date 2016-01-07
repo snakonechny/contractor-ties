@@ -5,3 +5,134 @@ date: "January 5, 2016"
 output: html_document
 ---
 
+##Prelude
+
+A long while ago I wrote [an undergraduate thesis](\site\linktopdf). Thanks to some phenomenal advising from several individuals it turned out to be a wonderful learning experience, and I often find myself thinking about the inherent question I asked in that project. I wanted to know how a large economic development agency such as the World Bank produces and dissimates the wealth of knowledge it has accumulated over time. It just so happened that in my analysis the proxie measure for this was indeed wealth - the cashflows from the Bank to its contractors and subcontractors that related one entity to another. I conceptualized these relationships as a network, a set of links between various organizations that have worked with the World Bank in Latin America.
+
+In my limited, high-level analysis I concluded that this network hasn't exactly evolved over time. It remained largely static - the Bank kept on working with the same organizations who, in turn, retained their small clusters of partner firms. Thus, the knowledge, too, remained contained, a finding I found rather discouraging.
+
+In the "Conclusions and further direction" section of my thesis I did bring up the possibility of a closer analysis of the participants of these networks, not just the individual node-firms but rather the communities they constituted and the relationships they held. This will be the focus of this small project.
+
+
+##Data
+
+If there is one thing the World Bank has done right recently, in my mind it must be their data repository. In its strides towards transperency, the Bank started publishing much of its operational data, including its financials and contract info, all of which is available in a neat API and [report generator](http://databank.worldbank.org/data/home.aspx). We will be working with one specific database listed under [World Bank Group Finances](https://finances.worldbank.org/Procurement/Major-Contract-Awards/kdui-wcs3). These are all major contract awards starting from year 2000, including the associated dollar amount and contractor details. I downloaded the dataset (around 70mb and 205K+ rows) as a static cvs file.
+
+##Plan of attack
+
+We will start with some general descriptives and high level analyses of where the money is flowing from and where it's flowing to; then we'll move to something more interesting and detailed, specifically the communities and clusters of contractors and the stories they tell. I will present my findings first and include the annotated R code that produced it immediately below each section.
+
+To start, we will load the packages that will be helping us.
+
+```{r message=FALSE, warning=FALSE}
+library(dplyr)
+suppressPackageStartupMessages(library(googleVis))
+library(ggplot2)
+library(circlize)
+
+#load the data
+data <- read.csv('Major_Contract_Awards.csv', header=T, stringsAsFactors = TRUE)
+
+#make sure all the columns are as we need them
+data$Total.Contract.Amount..USD. <- as.numeric(data$Total.Contract.Amount..USD.)
+data$Borrower.Country <- as.character(data$Borrower.Country)
+data$Supplier.Country <- as.character(data$Supplier.Country)
+
+#seems like the Bank (or whoever was inputing the data) doesn't know that Africa isn't a country :( We will manual remove such errors - the lists of countries should only include co
+#create a list of "strange" countries or miscoded regions for countries
+exceptions.list <- c('3A', 'AC', '60', 'SR', '7B', 'GZ', '6C', '7C', '<NA>', '6R', '7E', '6L', '3S', '7X', '4E', '8S', '1W', '6A', '3E', '5M', '4P', '4A', '#', '3W')
+
+country.data <- data %>% filter(!(Borrower.Country.Code %in% exceptions.list), !(Supplier.Country.Code %in% exceptions.list)) %>% group_by(Borrower.Country, Supplier.Country) %>% summarize(amount = sum(Total.Contract.Amount..USD.), contract.count = n())
+
+
+```
+
+##Money, big money
+
+Over all the years of observation, the total contract cost was around $13,934,864,134. Almost 14 billion dollars wasn't necessarily spent/expensed but instead budgeted for all the contracts. Mean contract cost - just under $68,000, median - $68,033. Figure 1 shows the budget allocation over time; Figure 2 - the distribution by country.
+
+```{r}
+data %>% summarize(total.cost = sum(Total.Contract.Amount..USD.), avg.cost = mean(Total.Contract.Amount..USD.), median.cost = median(Total.Contract.Amount..USD.))
+```
+
+
+**Figure 1: total project cost, 2000-2015**
+```{r results='asis'}
+fy.cost <- data %>% group_by(Fiscal.Year) %>% summarise(total.cost = sum(Total.Contract.Amount..USD.))
+
+fy.cost.graph <- gvisLineChart(fy.cost, 'Fiscal.Year', 'total.cost', options = list(hAxis="{format:'Y'}"))
+print(fy.cost.graph, 'chart')
+```
+
+
+**Figure 2: distribution of project cost by country, 2000-2015**
+```{r}
+#figure 2
+borrower.country.sums <- country.data %>% group_by(Borrower.Country) %>% summarise(total.borrowed = sum(amount), contract.count = sum(contract.count))
+
+debt.map <- gvisGeoChart(borrower.country.sums, locationvar = 'Borrower.Country', sizevar = 'contract.count', hovervar = 'Borrower.Country', colorvar = 'total.borrowed', options=list(colorAxis = "{values:[64875, 773540942], colors:['yellow', 'red']}", width=860, height=600))
+```
+
+```{r results='asis'}
+print(debt.map, 'chart')
+#note: I manually edited the html output to allow for thousands decimal point to show up in the tooltip (when hovering over any given country). Method described here: http://stackoverflow.com/questions/33771032/changing-the-number-format-in-google-charts-graphs-of-the-tooltip-data-and-also
+```
+
+These general descriptive statistics should give us some sense of how large the Bank's operation is. In some countries (China, India), over 10,000 contract engagements are registered. The cost of these engagements exceeds $770 million in China and $732 million in India.
+
+It may be worth clarifying what these numbers actually mean. The trail of dollars/contracts begins with the World Bank approving a project, typically an infrastructure investment (roads, schools, hospitals, etc.) or a service program (health education classes or natural park preservation initiative, for instance). By approving a project, the Bank issues capital to finance it. Depending on the complexity of the project at hand, the recipient/borrower country will require contractors or subcontractors to perform portions of the project. These "partners" may come from the borrower country itself or from abroad. We will explore these relationships next.
+
+##Who works for whom?
+
+Put yourself in the shoes of a loan recipient from the World Bank: you have the capital to do what you wanted to do, and now you need to figure out who will actually do the work. This choice should probably be a pragmatic, practical one. The work should be done by the person who will do it best. This pragmatism doesn't always drive the decisions of project managers, however. There could be a firm with an established relationship with the borrower country, at home or abroad, a relationship built on reputation, loyalty, or, worse, graft. The country I grew up in seems to thrive on the latter to this day.
+
+Without alleging any embezzlement in contractor relationships, let's examine some broader questions. For instance, for each borrower country, what portion of the contracts are performed by domestic firms versus foreign ones? One obvious limitation here: a firm might be registered in India, but it does not necessarily make it an Indian business. Unfortunately, this is as far as we can go with the public information available, so we'll have to settle here and beware of the bias.
+
+```{r}
+#We will recycle a data frame we created earlier - country.data
+
+country.prop <- country.data %>% group_by(Borrower.Country, Supplier.Country) %>% summarise(dollar.sum = sum(amount), contract.sum = sum(contract.count)) %>% mutate(dollar.proportion = (dollar.sum/sum(dollar.sum) * 100), contract.proportion = (contract.sum/sum(contract.sum))*100) %>% filter(Borrower.Country == Supplier.Country)
+
+proportions.map <- gvisGeoChart(country.prop, locationvar = 'Borrower.Country', colorvar = 'dollar.proportion', sizevar = 'contract.proportion', options=list(colorAxis = "{values:[0, 100], colors:['white', 'red']}", width=860, height=600))
+```
+
+```{r results='asis'}
+print(proportions.map, 'chart')
+```
+**Figure 3: Reliance on contract services from the borrower country; darker color/higher percentage - more contract money is allocated to domestic contractors.**
+
+By the looks of it, countries prefer keeping contracts and contract money at home. In some acute cases, such as Brazil or Argentina, some 90%+ of contract volume is reserved for domestic firms. Notice how that seems to hold true in Latin America in general. Part of this probably has to do with the types of projects that are happening in each region: Latin America, as I learned in my thesis work, seems to rely on smaller scale health, education, and governance efforts, as well as medium-size infrastructure projects. If you are going to build a school, chances are you'll buy your cement somewhere nearby.
+
+Now look at Central Asia. In Turkmenistan, Kazakhstan, and Uzbekistan, there seem to be far more outsiders working on development projects compared to the average globally. Some countries in Central Africa, too, exhibit this same behavior. Take Algeria, for instance, where only 33% of contract work is awarded to domestic firms. I wonder if this has anything to do with the availability of the services demanded in those countries. I'd hate to generalize about the level of economic development in those places, but if there isn't a firm that knows how to lay internet cable around you'll probably have to go look elsewhere, potentially even abroad.
+
+In general, I think it would be fair to conclude the most borrower countries are self sufficient and can mobilize the resources needed to complete the projects financed by the World Bank. To varying degree, they fill the knowledge or resource vacuum by contracting outsiders; we will look at this behavior next.
+
+##Help from the outside
+
+```{r eval = FALSE}
+#create a chord diagram sample
+#first, let's remove all the "self-supplying" we looked at above
+country.data$type <- mapply(identical, country.data$Borrower.Country, country.data$Supplier.Country)
+country.data <- country.data %>% filter(type == FALSE) %>% select(1:3) %>% ungroup() %>% arrange(desc(amount)) %>% top_n(25) %>% select(Supplier.Country, Borrower.Country, amount)
+
+#now let's define the attributes of the chord graph - the colors of the links namely
+col_fun <- colorRamp2(range(country.data$amount), c("#4281a4", "#fe938c"))
+
+chord.diagram <- chordDiagram(country.data, col = col_fun, annotationTrack = "grid", preAllocateTracks=list(track.height = 0.3))
+                              
+circos.trackPlotRegion(track.index=1, panel.fun=function(x,y) {
+  xlim = get.cell.meta.data("xlim") 
+  ylim = get.cell.meta.data("ylim")
+  sector.name=get.cell.meta.data("sector.index")
+  circos.text(mean(xlim), ylim[1], sector.name,facing="clockwise",
+              niceFacing=TRUE,adj=c(0,0.5))},bg.border=NA)
+```
+![](chord_diagram.jpeg)
+
+**Figure 4: Aggregate cash flows for international contracts, top 25 countries by dollars spent**
+
+Apologies for not having an interactive chord diagram here - there are ways to accomplish it in R, but the interactive product isn't very stable in my experience, so we will have to settle on a static one.
+
+Interactive or not, an interesting image emerges. The top provider of contractor services turns out to be France (the widest segment on the circumference of the chord diagram), and its partnerships are quite diversified. French companies work with multiple African countries, some of which are former French colonies. Another former colonial power, the UK, seems to work with a few African states. China is a curious case: some American firms are involved in development work there on World Bank's money and so are German companies. China, in turn, is helping out Vietnam (no surprise) and is trying to wedge itself into Indo-Bengladesh development partnerships. Is this a case of the Chinese exerting soft but valuable influence on regional level? Perhaps, but I wonder, too, if this behavior is more symbolic than pragmatic (read "profit seeking"). Chinese contractors helping out with development of a neighbor of their most serious Asian contender is a nice reminder of their economic power and reach.
+
+Frankly, I was expecting to see a much more one-side flow of services from the global North to the global South,from those who can provide "advanced" services and know-how to those who need these. The situation appears quite a bit more complicated and potentially illustrative of some geopolitical chess games.
