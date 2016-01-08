@@ -69,3 +69,10 @@ library(chorddiag)
 mat <- adjacencyList2Matrix(country.sum)
 
 chorddiag(mat)
+
+#-------------------#
+#assign random IDs to unique contractors
+data <- data %>% distinct(Supplier) %>% mutate(supplier.ID = as.numeric(Supplier))
+
+#select only the necessary column, 
+network.data <- data %>% select(2:9, 12:14, 17:20)
