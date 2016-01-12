@@ -2,6 +2,7 @@ library(dplyr)
 library(ggplot2)
 library(googleVis)
 library(circlize)
+library(igraph)
 
 data <- read.csv('Major_Contract_Awards.csv', header=T, stringsAsFactors = TRUE)
 
@@ -71,8 +72,112 @@ mat <- adjacencyList2Matrix(country.sum)
 chorddiag(mat)
 
 #-------------------#
+#Networks of cash
+
 #assign random IDs to unique contractors
-data <- data %>% distinct(Supplier) %>% mutate(supplier.ID = as.numeric(Supplier))
+data <- data %>% mutate(supplier.ID = as.numeric(Supplier))
 
 #select only the necessary column, 
-network.data <- data %>% select(2:9, 12:14, 17:20)
+network.data <- data %>% select(6,21)
+
+edge.list <- network.data %>% group_by(Project.ID) %>% filter(n()>=2) %>% group_by(Project.ID) %>% do(data.frame(t(combn(.$supplier.ID, 2)), stringsAsFactors = FALSE))
+
+edge.list <- edge.list %>% group_by(X1, X2) %>% summarize(n = n())
+#roll up duplicate connections into a column called 'n' and then select only rows that are unique
+
+edge.sort <- t(apply(edge.list[,1:2], 1, sort))
+
+edge.dupsremoved <- edge.list[!duplicated(edge.sort),] 
+
+edge.dupsremoved <- edge.dupsremoved %>% filter(X1 != 1)
+
+
+first.net <- graph.data.frame(edge.dupsremoved, directed = FALSE)
+
+length(V(first.net)) #figure out how many nodes there are (we know this already, but just to be complete)
+
+length(E(first.net)) #same for edges
+
+graph.density(first.net) #compute graph density - number of edges divided by the number of possible edges, expecting a very low figure
+
+node.degree <- degree(first.net) #compute degree metrics of the graph, per node, then averaged below
+
+mean(node.degree, na.rm = TRUE)
+
+degree.histo <- qplot(node.degree$degree.first.net., geom = 'histogram', binwidth = 5, xlim = c(0, 300), xlab = 'Degree category, bin width = 5', ylab = 'Count', main = 'Degree distribution, entire graph') + theme_bw() + theme(plot.title = element_text(size = rel(3)), axis.text=element_text(size = rel(2)), axis.title=element_text(size = rel(2)))
+                                                                                                                                                                                                                                  
+
+
+#radius(first.net) #compute radius of the graph
+
+#edge.connectivity(first.net) #compute edge connectivity of the graph as a whole
+
+#betweenness(first.net, directed = FALSE) #compute generic betweenness centrality measure
+
+#closeness(first.net, vids = V(graph), weights = 'n') #compute closeness for all nodes in the graph and account for 'repeated interactions' modelled by the 'n' column
+#not run
+
+#-----#
+#2002 analysis
+
+network.data <- data %>% filter(Fiscal.Year == '2002') %>% select(6,21)
+
+edge.list.2002 <- network.data %>% group_by(Project.ID) %>% filter(n()>=2) %>% group_by(Project.ID) %>% do(data.frame(t(combn(.$supplier.ID, 2)), stringsAsFactors = FALSE))
+
+edge.list.2002 <- edge.list.2002 %>% group_by(X1, X2) %>% summarize(n = n())
+
+edge.sort.2002 <- t(apply(edge.list.2002[,1:2], 1, sort))
+
+edge.dupsremoved.2002 <- edge.list.2002[!duplicated(edge.sort.2002),]
+
+edge.dupsremoved.2002 <- edge.dupsremoved.2002 %>% filter(X1 != 1)
+
+
+colnames(edge.dupsremoved.2002) <- c('from', 'to', 'weight')
+
+net.2002 <- graph.data.frame(edge.dupsremoved.2002, directed = FALSE)
+#already looks promising - the data weight only 2.1mb
+
+length(V(net.2002))
+
+length(E(net.2002)) 
+
+graph.density(net.2002)
+
+node.degree <- data.frame(degree(net.2002)) 
+
+mean(node.degree$degree.net.2002.)
+
+diameter(net.2002) #compute radius of the graph
+
+edge.connectivity(net.2002) #compute edge connectivity of the graph as a whole
+
+btw.2002 <- betweenness(net.2002, directed = FALSE, weights = net.2002$weight) #compute generic betweenness centrality measure
+
+cls.2002 <- closeness(net.2002) #compute closeness for all nodes in the graph and account for 'repeated interactions' modelled by the 'n' column
+
+degree.histo <- qplot(node.degree$degree.first.net., geom = 'histogram', binwidth = 5, xlim = c(0, 300), xlab = 'Degree category, bin width = 5', ylab = 'Count', main = 'Degree distribution, entire graph') + theme_bw()
+#-----------#
+
+fg.2002 <- fastgreedy.community(net.2002)
+length(fg.2002)
+
+which.max(sizes(fg.2002))
+sizes(fg.2002)
+
+#now let's select the firms that belong to this community - really their supplier IDs
+firms.comm1 <- V(net.2002) [membership(fg.2002)==1] %>% .$name %>% data.frame()
+subntw.comm1 <- subgraph(net.2002, V(net.2002) [membership(fg.2002)==1])
+
+mean(degree(subntw.comm1))
+
+firms.comm2 <- V(net.2002) [membership(fg.2002)==2] %>% .$name %>% data.frame()
+subntw.comm2 <- subgraph(net.2002, V(net.2002) [membership(fg.2002)==2])
+mean(degree(subntw.comm2))
+graph.density(subntw.comm2)
+
+l <- layout.fruchterman.reingold(subntw.comm2)
+plot(subntw.comm2, layout=l, vertex.size = 10, vertex.label = NA)
+
+which.max(degree(subntw.comm2))
+
